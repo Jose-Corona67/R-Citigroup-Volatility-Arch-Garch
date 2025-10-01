@@ -1,0 +1,140 @@
+---
+title: "ARCH"
+author: "Corona López José Luis"
+date: "2025-04-04"
+output: pdf_document
+---
+
+
+```{r}
+library(tseries)
+library(dynlm)
+library(urca)
+library(vars)
+library(FinTS)
+library(rugarch) 
+library(quantmod)
+library(forecast)
+```
+
+# Modelo ARCH
+
+## Introducción
+
+El análisis de los efectos ARCH en los rendimientos del precio de la acción de Citigroup (C) se justifica por la necesidad de modelar la volatilidad cambiante a lo largo del tiempo, una característica común en los mercados financieros. Esta serie fue seleccionada debido al impacto significativo que tuvo la crisis financiera de 2008 en el sector financiero global, siendo Citigroup una de las instituciones más afectadas. Este evento provocó una elevada volatilidad en los mercados, reflejada en los rendimientos de sus acciones.
+
+Además, la reciente decisión de Citigroup de separar sus operaciones en México, mediante la venta de Banamex, introduce un nuevo factor de incertidumbre. Este proceso de reestructuración podría generar fluctuaciones adicionales en el precio de la acción, ya que los inversores evalúan el impacto potencial de esta separación en la valoración de la empresa.
+
+
+```{r}
+# Obtener datos de Citigroup 
+getSymbols("C", from = "2000-01-01", to = "2025-04-01", periodicity = "monthly")
+
+# Precio de cierre
+PC <- Cl(C)
+
+# Rendimientos
+RendC <- dailyReturn(PC)
+plot(RendC, col = "saddlebrown")
+```
+
+Se observan fluctuaciones significativas en los rendimientos de Citigroup durante la crisis financiera de 2008, un evento que generó una alta volatilidad en los mercados globales. Además, se identifica una volatilidad notable, aunque de menor magnitud, en el período 2020-2022, posiblemente asociada a la incertidumbre económica derivada de la pandemia de COVID-19. Recientemente, se aprecian ligeras desviaciones de la estabilidad que trá en los años pasados. Los rendimientos puede que sean estacionarios con reversión a la media, no obstante, se nota que no tiene una varianza constante debido a las cuestiones mencionadas.
+
+
+```{r}
+hist(RendC, breaks = 20, main = "Rendiminetos", probability = T, col = "yellowgreen")
+lines(density(RendC), col = "red", lwd = 2)
+curve(dnorm(x, mean = mean(RendC), sd = sd(RendC)), add = TRUE, col = "blue", lwd = 2)
+```
+
+El histograma muestra la distribución de los rendimientos de Citigroup, representada en color verde amarillento. A simple vista, la distribución parece aproximarse a una normal. Se han superpuesto dos líneas para facilitar la comparación: la línea azul representa la distribución normal teórica, calculada con la media y la desviación estándar de los rendimientos observados, mientras que la línea roja muestra la densidad estimada de los datos, suavizando las fluctuaciones del histograma.
+
+```{r}
+acf(RendC)
+```
+
+En este gráfico se observa que pocos rezagos rebasan las bandas de confianza por muy poco, sin embargo, no son cuestiones demasiadas críticas, por lo que se puede seguir con el analisis y la prueba de estacionariedad.
+
+```{r}
+adf.test(RendC)
+```
+
+Para los rendimientos de Citigroup, obtenemos un $p-value=0.01 < 0.05$, por lo que rechazamos hipótesis nula al $\alpha= 0.05$, es decir que los rendimientos son estacionarios.
+
+## Desarrollo
+
+### Efectos ARCH
+
+Ahora se vereficará si de verdad existen efectos ARCH en los rendimientos mensuales de Citigroup tomando en cuenta un rezago.
+
+```{r}
+bydArchTest <- ArchTest(RendC, lags = 1, demean = TRUE)
+bydArchTest
+```
+Con $LM=67.573$, al 95% de confianza con $(\alpha=0.05)$ y $q=1$ grados de libertad, el valor de $\chi^2_{(0.95,1)}=3.8414$, lo que nos indica que la hipótesis nula se rechaza, lo que nos lleva a concluir que los rendimientos mensuales de Citigroup tiene efectos ARCH.
+
+### Modelo ARCH
+
+```{r}
+# Modelo ARCH(1)
+c.arch <- garch(RendC, c(0,1))
+summary(c.arch)
+```
+
+
+El modelo ARCH(1) muestra un ajuste significativo a los rendimientos de Citigroup, con coeficientes $\alpha_0$ y $\alpha_1$ estadísticamente relevantes y un comportamiento de varianza no explosivo $\alpha_1$. Sin embargo, la prueba de Jarque-Bera revela que los residuos no siguen una distribución normal, lo cual limita la validez de ciertas inferencias estadísticas. A pesar de esto, la prueba de Box-Ljung indica que el modelo captura adecuadamente la dependencia condicional en la varianza, al no detectar autocorrelación en los residuos al cuadrado. Dado el buen ajuste del modelo y la significancia de sus coeficientes, pero considerando la falta de normalidad en los residuos, se sugiere probar otros modelos como GARCH(1,1) o ARCH con mayor número de rezagos para mejorar el modelado.
+
+```{r}
+hhat <- ts(2*c.arch$fitted.values[-1,1]^2, start = c(2000, 01, 01), frequency = 12)
+plot.ts(hhat, main = "Varianza Condicional")
+```
+
+Esto grafica la varianza condicional estimada del modelo ARCH(1) a lo largo del tiempo y se nota las alteraciones en 2008 y en el 2020, mientras que en los demás años no tiene una volatilidad tan notoria como en estos.
+
+### Modelo GARCH
+
+```{r}
+# Especificar modelo GARCH(1,1)
+garch <- ugarchspec(variance.model = list(model = "sGARCH",
+                    garchOrder = c(1, 1)),
+                    mean.model = list(armaOrder = c(0, 0)),
+                    distribution.model = "norm")
+
+# Ajustar modelo GARCH a los rendimientos
+c.garch <- ugarchfit(spec = garch, data = RendC)
+show(c.garch)
+```
+
+Todos los parámetros del modelo son estadísticamente significativos al 5%, indicando una buena estimación de la dinámica de la varianza condicional. En particular, los coeficientes $\alpha_1$ = 0.272 y $\beta_1$ = 0.673 sugieren que hay una fuerte persistencia en la volatilidad, pero menor a 1, lo cual implica que el proceso es estacionario. Los tests de Ljung-Box sobre residuos estandarizados y sus cuadrados muestran que no hay autocorrelación residual significativa, y los tests ARCH indican que no queda heterocedasticidad no capturada.
+
+```{r}
+hhat <- ts(c.garch@fit$var, start = c(2000, 01, 01), frequency = 12)
+plot.ts(hhat, col = "gold3")
+```
+
+Tal como en el gráfico de la varianza del ARCH(1) se observa un pico muy pronunciado alrededor de 2008–2009, lo cual es consistente con la crisis financiera global, donde la volatilidad de los mercados se disparó.
+
+```{r}
+pronostico <- ugarchforecast(c.garch, n.ahead = 5)
+plot(pronostico, which = 1)
+```
+
+El gráfico muestra el pronóstico de 5 períodos, se nota que es una recta, esto porque se basa en $y_t = \beta_0 + e_t$, donde $\beta_0$ es la media, por lo tanto se espera que para los próximos plazos la media se mantena a pesar de los cambios en la varianza, ahora observará el pronóstico para la varianza condicional.
+
+```{r}
+plot(pronostico, which = 3)
+```
+
+El gráfico muestra la evolución y pronóstico de la volatilidad condicional de los rendimientos de Citigroup, esta muestra un aumento hacia inicios de 2025, indicando un periodo reciente de mayor incertidumbre mientras el pronóstico de sigma a futuro espera a que la volatilidad se mantenga relativamente estable o ligeramente decreciente.
+
+## Conclusión
+
+Los rendimientos de Citigroup presentan efectos ARCH que pueden ser complejos de modelar, debido a la evolución histórica del precio de sus acciones. Al igual que en otros casos, es necesario probar distintos modelos para identificar cuál se ajusta mejor a los datos. Además, aunque es posible realizar estimaciones de la volatilidad para periodos futuros, estas deben interpretarse con cuidado, ya que están sujetas a la incertidumbre inherente del mercado y a las limitaciones del modelo seleccionado.
+
+## Referencias
+
+Banamex. Separación Banamex-Citi. https://www.banamex.com/separacion-banamex-citi.html
+
+La Política Online. (2024, 18 de marzo). Ante la incertidumbre del mercado, Citi ahora aplaza la salida a bolsa de Banamex hasta 2026. https://www.lapoliticaonline.com/mexico/economia-mx/ante-la-incertidumbre-del-mercado-citi-ahora-aplaza-la-salida-a-bolsa-de-banamex-hasta-2026/
+
+Sorkin, A. R. (2010). The role of Citigroup in the 2008 financial crisis: An analysis of systemic risk. Journal of Financial Crises, 2(1), 35-50. Yale University. https://elischolar.library.yale.edu/cgi/viewcontent.cgi?article=1592&context=journal-of-financial-crises#:~:text=During%20the%20first%20three%20weeks,would%20constitute%20a%20systemic%20risk.
